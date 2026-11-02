@@ -1,0 +1,36 @@
+endpoints:
+  - endpoint: POST /api/v1/auth/register
+    category: auth
+    auth: none
+    body: { email: string(email), password: string(8..200) }
+    purpose: Create a CUSTOMER account; scrypt-hashed password, e-mail unique.
+    response: |
+      201 — { accessToken (HMAC-SHA256 JWT-style, 15 min),
+              refreshToken (opaque, stored hashed), userId }
+    status: [201, 400, 409, 500]
+
+  - endpoint: POST /api/v1/auth/login
+    category: auth
+    auth: none
+    body: { email, password }
+    purpose: Issue a fresh session (rate-limited).
+    response: 200 — { accessToken, refreshToken, userId }
+    status: [200, 401, 500]
+
+  - endpoint: POST /api/v1/auth/refresh
+    category: auth
+    auth: none
+    body: { refreshToken }
+    purpose: Rotating refresh — old token revoked, new pair issued. Replays fail.
+    response: 200 — { accessToken, refreshToken, userId }
+    status: [200, 401, 500]
+
+  - endpoint: POST /api/v1/auth/logout
+    category: auth
+    auth: none
+    body: { refreshToken }
+    purpose: Revoke the session's refresh token (idempotent).
+    response: 204
+    status: [204, 500]
+
+authHeader: "Authorization: Bearer <accessToken> for all protected endpoints"

@@ -1,0 +1,35 @@
+endpoints:
+  - endpoint: POST /api/v1/holds
+    category: holds
+    auth: Bearer (userId derived from token — never trusted from body)
+    headers: optional ttlSeconds override in body; 30-3600
+    body: { tripId, classType: FIRST|SECOND|SLEEPER, originCode, destinationCode }
+    behavior: |
+      1. Resolve stop indexes O<D for the codes on that trip.
+      2. ONE transaction (ReadCommitted):
+         SELECT ts.id FROM trip_seats ts
+         WHERE trip = :tripId AND class = :classType
+           AND NOT EXISTS (live allocation overlapping int4range(O, d))
+         ORDER BY "coachNo", "seatNo"
+         FOR UPDATE OF ts SKIP LOCKED LIMIT 1
+      3. INSERT seat_holds (ACTIVE, expires_at = NOW()+TTL) + seat_segment_holds row.
+      4. Exclusion constraint seat_segment_no_overlap backs this up at the DB level.
+    response: 201 — { holdId, tripId, seatId, seatNumber (int), coachCode, classType,
+                       expiresAt, segmentRange: { startStopIndex, endStopIndex }, fareMinor }
+    status: [201, 404, 409 SEAT_UNAVAILABLE, 400, 500]
+
+  - endpoint: GET /api/v1/holds/:holdId
+    category: holds
+    auth: Bearer (ownership enforced server-side)
+    purpose: Poll a hold; countdown secondsRemaining.
+    response: 200 — { holdId, tripId, status: ACTIVE|RELEASED|EXPIRED|CONSUMED,
+                       secondsRemaining, segmentRange }
+    status: 404 if not found or not owned.
+
+  - endpoint: DELETE /api/v1/holds/:holdId
+    category: holds
+    auth: Bearer (ownership enforced server-side)
+    purpose: Voluntary release — frees [O, D) immediately. Idempotent: releasing a
+      RELEASED/EXPIRED hold is a no-op success; only ACTIVE → RELEASED transitions.
+    response: 204
+    status: [204, 404, 500]

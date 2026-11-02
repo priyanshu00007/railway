@@ -1,0 +1,35 @@
+endpoints:
+  - endpoint: POST /api/v1/holds  (preferred-seat extension)
+    category: holds
+    auth: Bearer
+    body: |
+      { tripId, classType, originCode, destinationCode,
+        ttlSeconds?: 30..3600,
+        preferredCoach?: string(1..8), preferredSeat?: int(1..400) }
+    behavior: |
+      Exact seat allotment when preferred* supplied: that seat is locked
+      SKIP-LOCKED only if a live allocation does not overlap; otherwise it
+      falls back to standard auto-assignment (or 409 SEAT_UNAVAILABLE when
+      none). Never double-allocates — the exclusion constraint backs this up.
+    response: 201 (hold) | 409 SEAT_UNAVAILABLE | 400
+
+  - endpoint: GET /api/v1/trips/:tripId/progress
+    category: discovery
+    auth: none
+    purpose: |
+      Journey tracking — timetable-derived (synthetic assumption: on-time
+      running; no real GPS). Shows every stop with scheduled times and a
+      milestone: departed | at_stop | upcoming, the current segment being
+      travelled, and the next stop.
+    response: |
+      200 — { tripId, trainNumber, status, running,
+              currentSegment: { fromStopIndex, toStopIndex, fromCode, toCode } | null,
+              nextStop: { code, name, stopIndex, scheduledArrival } | null,
+              stops: [{ code, name, stopIndex, scheduledArrival, scheduledDeparture, milestone }] }
+    status: [200, 404]
+
+  - endpoint: GET /api/v1/bookings?limit=1..50&cursor=<lastId>
+    category: bookings
+    auth: Bearer
+    purpose: Cursor-paginated listing of the caller's bookings (newest first).
+    response: 200 — { items: [...], nextCursor: string|null }

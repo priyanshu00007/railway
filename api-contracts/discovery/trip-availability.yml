@@ -1,0 +1,12 @@
+endpoint: GET /api/v1/trips/:tripId/availability
+category: discovery
+auth: none
+query: |
+  originCode, destinationCode
+purpose: Seat-level map for a segment range — FREE / HELD / OCCUPIED per seat
+  (HELD = active unexpired hold; OCCUPIED = confirmed booking).
+response: |
+  200 — { tripId, originStopIndex, destinationStopIndex,
+          classes: [{ classType, availableSeats, baseFare }],
+          seatMap: [{ seatId, coachCode, seatNumber, classType, state }] }
+status: [200, 400, 404, 500]

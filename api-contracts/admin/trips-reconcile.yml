@@ -1,0 +1,22 @@
+endpoints:
+  - endpoint: POST /api/v1/admin/trips
+    category: admin
+    auth: Bearer + role ADMIN (403 otherwise)
+    body: |
+      { trainId, serviceDate: YYYY-MM-DD, stops: [
+        { code, arrivalTime: null|ISO, departureTime: ISO } ] (min 2) }
+    behavior: Creates the trip + ordered TripStops (stopIndex = array order) and
+      materializes one TripSeat per train seat. TRIP_CREATED audit row.
+    response: 201 — { tripId, trainNumber, serviceDate, seatCount }
+    status: [201, 400, 404, 409, 403]
+
+  - endpoint: POST /api/v1/admin/reconcile
+    category: admin
+    auth: Bearer + role ADMIN
+    behavior: |
+      1. Expire stale ACTIVE holds past expires_at (idempotent, status-guarded).
+      2. Count unprocessed outbox events (worker triggers processing).
+      3. Payments SUCCEEDED never linked to a booking → PENDING refund entry
+         (never completed without confirmation).
+    response: 200 — { expiredHolds, unprocessedOutboxEvents, orphanedSuccessfulPayments, refundsIssued }
+    status: [200, 403]

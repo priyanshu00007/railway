@@ -1,0 +1,21 @@
+endpoints:
+  - endpoint: GET /healthz
+    category: system
+    auth: none
+    purpose: Liveness probe.
+    response: 200 — { status: "ok", time }
+
+  - endpoint: GET /readyz
+    category: system
+    auth: none
+    purpose: Readiness — pings PostgreSQL with SELECT 1.
+    response: 200 { status: ready, db: up } | 503 { status: not_ready, db: down }
+
+  - endpoint: GET /metrics
+    category: system
+    auth: none
+    purpose: Prometheus text exposition.
+    exported: railbook_requests_total, railbook_seat_unavailable_total,
+      railbook_holds_created_total, railbook_holds_expired_total,
+      railbook_webhook_duplicate_total, railbook_bookings_confirmed_total,
+      railbook_bookings_cancelled_total, lockAcquisitionMsLast

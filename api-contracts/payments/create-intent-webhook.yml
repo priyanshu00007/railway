@@ -1,0 +1,29 @@
+endpoints:
+  - endpoint: POST /api/v1/payments/create-intent
+    category: payments
+    auth: Bearer
+    headers: Idempotency-Key: <uuid> REQUIRED (same key + same hold → same stored intent)
+    body: { holdId }   # amount is SERVER-derived from pricing — never client-supplied
+    behavior: |
+      Hold must be ACTIVE and unexpired. Charges integer minor units (INR).
+      clientSecret is a simulated provider token (demo only).
+    response: 201 — { paymentId, holdId, amountMinor, currency: "INR",
+                       clientSecret, status: PENDING }
+    status: [201, 404, 410 HOLD_EXPIRED, 400, 409]
+
+  - endpoint: POST /api/v1/webhooks/payments
+    category: payments
+    auth: HMAC-SHA256 signature (no bearer)
+    body: |
+      { eventId, eventType: PAYMENT_SUCCESS|PAYMENT_FAILED,
+        paymentReference, holdId, amount: int minor units }
+    signature: HMAC-SHA256 hex of
+      `${eventId}|${paymentReference}|${amountMinor}|${eventType}`
+      with PAYMENT_WEBHOOK_SECRET.
+    behavior: |
+      1. Verify signature (timing-safe compare).
+      2. Dedupe: providerReference unique constraint + replay check → duplicate
+         callbacks are recorded (metrics railbook_webhook_duplicate_total) and ignored.
+      3. Mark payment SUCCEEDED/FAILED; enqueue PAYMENT_* outbox event.
+    response: 200 — { received: true, status: accepted|captured_failure|duplicate_ignored }
+    status: [200, 401 invalid signature, 404]

@@ -1,0 +1,7 @@
+endpoint: GET /api/v1/stations
+category: discovery.auth: none
+purpose: Station directory with codes and display timezones.
+response: |
+  200 application/json — Array of
+    { code: string, name: string, timezone: string }
+status: [200, 500]

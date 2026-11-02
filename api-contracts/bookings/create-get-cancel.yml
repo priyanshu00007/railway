@@ -1,0 +1,42 @@
+endpoints:
+  - endpoint: POST /api/v1/bookings
+    category: bookings
+    auth: Bearer (userId from token, never the body)
+    body: |
+      { holdId, paymentReference (from webhook), passengers: [
+        { fullName (2..120), age (1..120), gender: M|F|O } ] (1..6 passengers) }
+    behavior: |
+      One transaction:
+      1. SELECT hold FOR UPDATE — verifies ACTIVE and unexpired
+         (races expiry sweeps; both are status-guarded single writers).
+      2. Payment must be SUCCEEDED with matching providerReference, unattached.
+      3. hold ACTIVE → CONSUMED (allocation persists into the confirmed booking).
+      4. Creates Booking (PNR reference, fareSnapshotMinor) + passengers +
+         BOOKING_CONFIRMED outbox event.
+    response: 201 — { bookingId, pnr, status: CONFIRMED, tripId,
+                       coach, seatNumber, classType, fareMinor, journey, createdAt }
+    status: [201, 404, 409, 410 HOLD_EXPIRED, 402 PAYMENT_UNSUCCESSFUL]
+
+  - endpoint: GET /api/v1/bookings
+    category: bookings
+    auth: Bearer
+    response: 200 — the caller's bookings only.
+
+  - endpoint: GET /api/v1/bookings/:bookingId
+    category: bookings
+    auth: Bearer (ownership enforced server-side; other users get 404)
+    response: 200 — booking with passengers and payments.
+
+  - endpoint: POST /api/v1/bookings/:bookingId/cancel
+    category: bookings
+    auth: Bearer (ownership enforced)
+    behavior: |
+      One transaction, FOR UPDATE on the booking:
+      1. CONFIRMED → CANCELLED (rerun on a CANCELLED booking is idempotent and
+         returns the same refund outcome).
+      2. Frees the segment: seat_segment_holds deleted; hold → RELEASED.
+      3. Refund ledger entry PENDING — never reported completed without
+         confirmation later. Fee = 20% of fare (min 20000 minor).
+      4. BOOKING_CANCELLED outbox event.
+    response: 200 — { bookingId, status: CANCELLED, refundAmount, cancellationFee }
+    status: [200, 404, 409 INVALID_STATE_TRANSITION]

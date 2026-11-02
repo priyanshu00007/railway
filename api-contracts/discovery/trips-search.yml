@@ -1,0 +1,20 @@
+endpoint: GET /api/v1/trips/search
+category: discovery
+auth: none
+query: |
+  from: station code, e.g. NDLS
+  to: station code, e.g. AGC
+  date: YYYY-MM-DD
+purpose: |
+  Find scheduled trips visiting origin before destination on the date, with
+  per-class available seat counts over [fromStopIndex, toStopIndex) — snapshot
+  only, never a reservation — plus synthetic pricing (baseFare minor units).
+notes: availability computed with EXISTS against live allocations
+  (sh.status='CONSUMED' OR sh.status='ACTIVE' AND expires_at>NOW())
+  with int4range overlap check. No row locks taken.
+response: |
+  200 — Array of
+    { tripId, trainNumber, trainName, originStation, destinationStation,
+      departureTime, arrivalTime (ISO), originStopIndex, destinationStopIndex,
+      classes: [{ classType: FIRST|SECOND|SLEEPER, availableSeats, baseFare }] }
+status: [200, 400, 500]

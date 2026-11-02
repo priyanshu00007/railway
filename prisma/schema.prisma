@@ -1,0 +1,351 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Identity ────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(CUSTOMER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  refreshTokens RefreshToken[]
+  bookings      Booking[]
+  seatHolds     SeatHold[]
+  idempotencyRecords IdempotencyRecord[]
+  auditLogs     AuditLog[] @relation("AuditActor")
+
+  @@map("users")
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+  @@map("role")
+}
+
+model RefreshToken {
+  id           String   @id @default(cuid())
+  userId       String
+  tokenHash    String   @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─── Railway catalog ─────────────────────────────────────────────────────────
+
+model Station {
+  id       String @id @default(cuid())
+  code     String @unique
+  name     String
+  timezone String
+
+  tripStops TripStop[]
+
+  @@map("stations")
+}
+
+model Train {
+  id       String   @id @default(cuid())
+  number   String   @unique
+  name     String
+  status   TrainStatus @default(ACTIVE)
+  coaches  Coach[]
+  trips    Trip[]
+}
+
+enum TrainStatus {
+  ACTIVE
+  RETIRED
+  @@map("train_status")
+}
+
+model Coach {
+  id       String    @id @default(cuid())
+  trainId  String
+  coachNo  String
+  class    TravelClass
+  seats    Seat[]
+
+  train Train @relation(fields: [trainId], references: [id], onDelete: Cascade)
+
+  @@unique([trainId, coachNo])
+  @@map("coaches")
+}
+
+enum TravelClass {
+  FIRST
+  SECOND
+  SLEEPER
+  @@map("travel_class")
+}
+
+model Seat {
+  id       String @id @default(cuid())
+  coachId  String
+  seatNo   Int
+
+  coach Coach @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  tripSeats TripSeat[]
+  @@map("seats")
+}
+
+// A scheduled run of a train on a service date owns its seat instances.
+model Trip {
+  id          String     @id @default(cuid())
+  trainId     String
+  serviceDate DateTime   @db.Date
+  status      TripStatus @default(SCHEDULED)
+
+  train  Train     @relation(fields: [trainId], references: [id])
+  stops  TripStop[]
+  tripSeats TripSeat[]
+  seatHolds SeatHold[]
+
+  @@unique([trainId, serviceDate])
+  @@index([serviceDate])
+  @@map("trips")
+}
+
+enum TripStatus {
+  SCHEDULED
+  CANCELLED
+  COMPLETED
+  @@map("trip_status")
+}
+
+model TripStop {
+  id          String @id @default(cuid())
+  tripId      String
+  stationId   String
+  stopIndex   Int // ordered 0..N-1 along the route
+  arrivalAt   DateTime? // UTC; null at origin arrival / destination departure as needed
+  departureAt DateTime?
+
+  trip    Trip    @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  station Station @relation(fields: [stationId], references: [id])
+
+  @@unique([tripId, stopIndex])
+  @@index([stationId])
+  @@map("trip_stops")
+}
+
+// Physical seat instance of a car on one scheduled trip (segment inventory unit).
+model TripSeat {
+  id       String      @id @default(cuid())
+  tripId   String
+  seatId   String
+  coachNo  String
+  seatNo   Int
+  class    TravelClass
+
+  trip    Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  seat    Seat @relation(fields: [seatId], references: [id])
+  segments SeatSegmentHold[]
+
+  @@unique([tripId, seatId])
+  @@index([tripId, coachNo, seatNo])
+  @@map("trip_seats")
+}
+
+// ─── Inventory holds (segment-based) ─────────────────────────────────────────
+
+model SeatHold {
+  id        String    @id @default(cuid())
+  userId    String
+  tripId    String
+  status    HoldStatus @default(ACTIVE)
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  releasedAt DateTime?
+
+  user     User          @relation(fields: [userId], references: [id])
+  trip     Trip          @relation(fields: [tripId], references: [id])
+  segments SeatSegmentHold[]
+  bookingId String? @unique
+  booking  Booking?      @relation(fields: [bookingId], references: [id])
+
+  @@index([userId, status])
+  @@index([tripId, expiresAt])
+  @@map("seat_holds")
+}
+
+enum HoldStatus {
+  ACTIVE
+  RELEASED
+  EXPIRED
+  CONSUMED // became a confirmed booking
+  @@map("hold_status")
+}
+
+// One segment of a hold: covers stop indices [fromIndex, toIndex) on a trip seat.
+// Overlap of two ACTIVE/CONSUMED segments on the same TripSeat is forbidden —
+// enforced at DB level with an exclusion constraint added via raw SQL migration.
+model SeatSegmentHold {
+  id        String @id @default(cuid())
+  holdId    String
+  tripSeatId String
+  fromIndex Int
+  toIndex   Int
+
+  hold     SeatHold @relation(fields: [holdId], references: [id], onDelete: Cascade)
+  tripSeat TripSeat @relation(fields: [tripSeatId], references: [id])
+
+  @@index([tripSeatId])
+  @@map("seat_segment_holds")
+}
+
+// ─── Bookings ────────────────────────────────────────────────────────────────
+
+model Booking {
+  id               String       @id @default(cuid())
+  bookingReference String       @unique
+  userId           String
+  status           BookingStatus @default(PENDING_PAYMENT)
+  fareSnapshotMinor Int          // total fare in integer minor units (snapshot)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  cancelledAt      DateTime?
+
+  user      User        @relation(fields: [userId], references: [id])
+  passengers Passenger[]
+  payments  Payment[]
+  holdId    String?
+  hold      SeatHold?
+
+  @@index([userId, createdAt])
+  @@map("bookings")
+}
+
+enum BookingStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCEL_PENDING
+  CANCELLED
+  EXPIRED
+  PAYMENT_REVIEW
+  @@map("booking_status")
+}
+
+model Passenger {
+  id            String  @id @default(cuid())
+  bookingId     String
+  fullName      String
+  age           Int
+  gender        String
+  seatLabel     String?
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@map("passengers")
+}
+
+// ─── Payments & refunds ──────────────────────────────────────────────────────
+
+model Payment {
+  id               String        @id @default(cuid())
+  bookingId        String?
+  holdId           String?
+  amountMinor      Int
+  currency         String        @default("INR")
+  status           PaymentStatus @default(PENDING)
+  clientSecret     String
+  idempotencyKey   String        @unique
+  providerReference String?      @unique
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  booking Booking? @relation(fields: [bookingId], references: [id])
+  refunds Refund[]
+
+  @@index([bookingId])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  RECONCILING
+  REFUNDED
+  @@map("payment_status")
+}
+
+model Refund {
+  id          String      @id @default(cuid())
+  paymentId   String
+  amountMinor Int
+  status      RefundStatus @default(PENDING)
+  reason      String?
+  createdAt   DateTime    @default(now())
+  completedAt DateTime?
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@map("refunds")
+}
+
+enum RefundStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  @@map("refund_status")
+}
+
+// ─── Operations ──────────────────────────────────────────────────────────────
+
+model IdempotencyRecord {
+  id          String   @id @default(cuid())
+  scope       String
+  keyHash     String
+  requestHash String
+  status      String   @default("COMPLETED")
+  response    Json
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  userId String
+
+  @@unique([scope, keyHash])
+  @@map("idempotency_records")
+}
+
+model OutboxEvent {
+  id          String    @id @default(cuid())
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([processedAt])
+  @@map("outbox_events")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  target    String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@index([createdAt])
+  @@map("audit_logs")
+}
